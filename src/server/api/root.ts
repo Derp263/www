@@ -2,6 +2,8 @@ import { discord_router } from '@/server/api/routers/discord'
 import { history_router } from '@/server/api/routers/history'
 import { leaderboard_router } from '@/server/api/routers/leaderboard'
 import { playerStateRouter } from '@/server/api/routers/player-state'
+import { queueRouter } from '@/server/api/routers/queue'
+import { ratingsRouter } from '@/server/api/routers/ratings'
 import { createCallerFactory, createTRPCRouter } from '@/server/api/trpc'
 
 /**
@@ -14,6 +16,8 @@ export const appRouter = createTRPCRouter({
   discord: discord_router,
   leaderboard: leaderboard_router,
   playerState: playerStateRouter,
+  ratings: ratingsRouter,
+  queue: queueRouter,
 })
 
 // export type definition of API

@@ -1,10 +1,11 @@
 import { createTRPCRouter, publicProcedure } from '@/server/api/trpc'
 import { db } from '@/server/db'
-import { metadata, player_games, raw_history } from '@/server/db/schema'
+import { GameMode, metadata, player_games, raw_history } from '@/server/db/schema'
 import { desc, eq } from 'drizzle-orm'
 import ky from 'ky'
 import { chunk } from 'remeda'
 import { z } from 'zod'
+import * as eloService from '@/server/services/elo.service'
 
 export const history_router = createTRPCRouter({
   user_games: publicProcedure
@@ -26,58 +27,10 @@ export const history_router = createTRPCRouter({
 })
 
 export async function syncHistory() {
-  const cursor = await db
-    .select()
-    .from(metadata)
-    .where(eq(metadata.key, 'history_cursor'))
-    .limit(1)
-    .then((res) => res[0])
-  const data = await ky
-    .get('https://api.neatqueue.com/api/history/1226193436521267223', {
-      searchParams: {
-        start_game_number: cursor?.value ?? 1,
-      },
-      timeout: 60000,
-    })
-    .json<any>()
-  const matches = await fetch(
-    'https://api.neatqueue.com/api/matches/1226193436521267223'
-  ).then((res) => res.json())
-  const firstGame = Object.keys(matches).sort(
-    (a, b) => Number.parseInt(a) - Number.parseInt(b)
-  )[0]
-
-  if (!firstGame) {
-    throw new Error('No first game found')
-  }
-  if (firstGame === 'detail') {
-    await db.insert(metadata).values({
-      key: 'history_cursor_failure',
-      value: JSON.stringify(matches),
-    })
-    throw new Error('Something went wrong')
-  }
-  await db
-    .insert(metadata)
-    .values({
-      key: 'history_cursor',
-      value: firstGame,
-    })
-    .onConflictDoUpdate({
-      target: metadata.key,
-      set: {
-        key: 'history_cursor',
-        value: firstGame,
-      },
-    })
-
-  const chunkedData = chunk(data.data, 100)
-  for (const chunk of chunkedData) {
-    await insertGameHistory(chunk).catch((e) => {
-      console.error(e)
-    })
-  }
-  return data
+  // This function is no longer needed as we're storing match history directly
+  // in our own database. It's kept as a placeholder for backward compatibility.
+  console.log('syncHistory is deprecated - match history is now stored directly in our database')
+  return { message: 'Match history is now stored directly in our database' }
 }
 
 function processGameEntry(gameId: number, game_num: number, entry: any) {
@@ -166,16 +119,80 @@ export async function insertGameHistory(entries: any[]) {
     return processGameEntry(id, game_num, entry)
   })
 
+  // Group games by game number to process pairs together
+  const gamesByNumber: Record<number, any[]> = {}
+  playerGameRows.forEach(row => {
+    if (!gamesByNumber[row.gameNum]) {
+      gamesByNumber[row.gameNum] = []
+    }
+    gamesByNumber[row.gameNum].push(row)
+  })
+
+  // Process each game
   await Promise.all(
-    playerGameRows.map(async (row) => {
-      return db
-        .insert(player_games)
-        .values(row)
-        .onConflictDoUpdate({
-          target: [player_games.playerId, player_games.gameNum],
-          set: row,
+    Object.values(gamesByNumber).map(async (gameRows) => {
+      // Skip if we don't have exactly 2 players
+      if (gameRows.length !== 2) {
+        console.log('Skipping game with != 2 players:', gameRows.length)
+        return
+      }
+
+      // Insert game records
+      await Promise.all(
+        gameRows.map(async (row) => {
+          return db
+            .insert(player_games)
+            .values(row)
+            .onConflictDoUpdate({
+              target: [player_games.playerId, player_games.gameNum],
+              set: row,
+            })
+            .then((res) => res[0])
         })
-        .then((res) => res[0])
+      )
+
+      // Update Elo ratings
+      const [player1, player2] = gameRows
+
+      // Map game type to our GameMode enum
+      let gameMode: string
+      switch (player1.gameType.toLowerCase()) {
+        case 'vanilla':
+          gameMode = GameMode.VANILLA
+          break
+        case 'standard':
+        case 'ranked':
+          gameMode = GameMode.STANDARD
+          break
+        case 'badlatro':
+          gameMode = GameMode.BADLATRO
+          break
+        default:
+          // Default to standard for unknown game types
+          gameMode = GameMode.STANDARD
+      }
+
+      // Determine result for Elo calculation (1 for player1 win, 0.5 for draw, 0 for player2 win)
+      let eloResult: number
+      if (player1.result === 'win' && player2.result === 'loss') {
+        eloResult = 1
+      } else if (player1.result === 'loss' && player2.result === 'win') {
+        eloResult = 0
+      } else if (player1.result === 'tie' && player2.result === 'tie') {
+        eloResult = 0.5
+      } else {
+        // Skip games with unknown results
+        console.log('Skipping game with unknown result:', player1.result, player2.result)
+        return
+      }
+
+      // Update Elo ratings
+      await eloService.updateRatings(
+        player1.playerId,
+        player2.playerId,
+        gameMode,
+        eloResult
+      )
     })
   )
 }

@@ -1,5 +1,5 @@
 import type { BaseLayoutProps } from 'fumadocs-ui/layouts/shared'
-import { BookOpen, CircleDollarSign, Info, Trophy, Upload } from 'lucide-react'
+import { BookOpen, CircleDollarSign, Info, Trophy, Upload, Users } from 'lucide-react'
 import { Header } from './_components/header'
 
 const links = [
@@ -12,6 +12,11 @@ const links = [
     text: 'Leaderboards',
     url: '/leaderboards',
     icon: <Trophy />,
+  },
+  {
+    text: 'Ranked Queue',
+    url: '/queue',
+    icon: <Users />,
   },
   {
     text: 'About',
